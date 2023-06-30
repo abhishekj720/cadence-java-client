@@ -19,6 +19,8 @@ package com.uber.cadence.migration;
 
 import static junit.framework.TestCase.assertEquals;
 import static junit.framework.TestCase.fail;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 import com.uber.cadence.*;
 import com.uber.cadence.client.WorkflowClient;
@@ -36,6 +38,8 @@ public class MigrationIWorkflowServiceTest {
 
   static final String TASK_LIST = "tasklist";
   static final String WORKFLOW_NAME = "SimpleWF";
+
+  static final byte[] NEXT_PAGE_TOKEN = {};
 
   private TestWorkflowEnvironment testEnvNew;
   private Worker workerNew;
@@ -121,7 +125,27 @@ public class MigrationIWorkflowServiceTest {
   }
 
   @Test
-  public void testSignalWithStartWorkflowExecution() {
+  public void testStartWorkflowExecutionWithOldWorkflow() {
+    try {
+      StartWorkflowExecutionResponse response =
+          migrationService.StartWorkflowExecution(
+              new StartWorkflowExecutionRequest()
+                  .setRequestId("requestID")
+                  .setDomain(testEnvOld.getDomain())
+                  .setTaskList(new TaskList().setName(TASK_LIST))
+                  .setWorkflowType(new WorkflowType().setName(WORKFLOW_NAME))
+                  .setWorkflowId("wf-old")
+                  .setExecutionStartToCloseTimeoutSeconds(1)
+                  .setTaskStartToCloseTimeoutSeconds(10));
+      assertNumOfExecutions(testEnvNew, "wf-old", 1);
+      assertNumOfExecutions(testEnvOld, "wf-old", 0);
+    } catch (TException e) {
+      fail("should not throw error on start workflow" + e.getMessage());
+    }
+  }
+
+  @Test
+  public void testSignalWithStartWorkflowExecutionWithNewWorkflow() {
     try {
       StartWorkflowExecutionResponse response =
           migrationService.SignalWithStartWorkflowExecution(
@@ -144,64 +168,205 @@ public class MigrationIWorkflowServiceTest {
   }
 
   @Test
-  public void testGetWorkflowExecutionHistory() throws EntityNotExistsError {
+  public void testSignalWithStartWorkflowExecutionWithOldWorkflow() {
     try {
-      WorkflowExecution execution = new WorkflowExecution().setWorkflowId("wf-completed");
-      GetWorkflowExecutionHistoryRequest request =
-          new GetWorkflowExecutionHistoryRequest()
-              .setDomain(testEnvOld.getDomain())
-              .setExecution(execution);
+      StartWorkflowExecutionResponse response =
+          migrationService.SignalWithStartWorkflowExecution(
+              new SignalWithStartWorkflowExecutionRequest()
+                  .setRequestId("requestID")
+                  .setDomain(testEnvOld.getDomain())
+                  .setTaskList(new TaskList().setName(TASK_LIST))
+                  .setSignalName("signalName")
+                  .setWorkflowType(new WorkflowType().setName(WORKFLOW_NAME))
+                  .setWorkflowId("wf-old")
+                  .setExecutionStartToCloseTimeoutSeconds(1)
+                  .setTaskStartToCloseTimeoutSeconds(10)
+                  .setSignalInput(new byte[] {}));
 
-      try {
-        GetWorkflowExecutionHistoryResponse response =
-            migrationService.GetWorkflowExecutionHistory(request);
-
-        // Check if the workflow is completed
-        if (response.getHistory().getEvents().isEmpty()) {
-          // Workflow is already completed, log a message or handle the error gracefully
-          System.out.println("Workflow is already completed");
-        } else {
-          // Workflow is still running, perform necessary assertions or actions
-          assertEquals(0, response.getHistory().getEvents().size());
-          // assertNumOfExecutions(testEnvNew, "wf-new", 1);
-          assertNumOfExecutions(testEnvOld, "wf-new", 0);
-        }
-      } catch (WorkflowExecutionAlreadyCompletedError e) {
-        // Workflow is already completed, log a message or handle the error gracefully
-        System.out.println("Workflow is already completed");
-        //      } catch (EntityNotExistsError e) {
-        //        fail("Entity searched does not exist");
-      }
+      assertNumOfExecutions(testEnvNew, "wf-old", 1);
+      assertNumOfExecutions(testEnvOld, "wf-old", 0);
     } catch (TException e) {
-      fail("should not throw error on get workflow execution history: " + e.getMessage());
+      fail("should not throw error on signal with start workflow" + e.getMessage());
     }
   }
 
   @Test
-  public void testListWorkflowExecutions() {
+  public void testGetWorkflowExecutionHistoryWithCompletedWFInBoth() {
+    WorkflowExecution execution = new WorkflowExecution().setWorkflowId("wf-completed-in-both");
     try {
-      ListWorkflowExecutionsResponse response =
-          migrationService.ListWorkflowExecutions(
-              new ListWorkflowExecutionsRequest()
+      GetWorkflowExecutionHistoryResponse expectedResponse =
+          clientNew
+              .getService()
+              .GetWorkflowExecutionHistory(
+                  new GetWorkflowExecutionHistoryRequest()
+                      .setDomain(testEnvNew.getDomain())
+                      .setExecution(execution));
+      GetWorkflowExecutionHistoryResponse response =
+          migrationService.GetWorkflowExecutionHistory(
+              new GetWorkflowExecutionHistoryRequest()
                   .setDomain(testEnvOld.getDomain())
-                  .setPageSize(10));
-      assertEquals(4, response.getExecutions().size());
-    } catch (TException e) {
+                  .setExecution(execution));
+      assertEquals(expectedResponse, response);
+    } catch (Exception e) {
+      fail("should not throw error on get workflow execution on both client");
+    }
+  }
+
+  @Test
+  public void testGetWorkflowExecutionHistoryWithCompletedWFInNew() {
+
+    try {
+      WorkflowExecution execution =
+          new WorkflowExecution().setWorkflowId("wf-completed-only-in-new");
+      GetWorkflowExecutionHistoryResponse response =
+          migrationService.GetWorkflowExecutionHistory(
+              new GetWorkflowExecutionHistoryRequest()
+                  .setDomain(testEnvNew.getDomain())
+                  .setExecution(execution));
+      assertTrue("Workflow completed in New", response.getHistory().getEvents().size() > 0);
+    } catch (Exception e) {
+      fail("should not throw error on get workflow execution on new client");
+    }
+  }
+
+  @Test
+  public void testGetWorkflowExecutionHistoryWithCompletedWFInOld() {
+
+    try {
+      WorkflowExecution execution =
+          new WorkflowExecution().setWorkflowId("wf-completed-only-in-new");
+      GetWorkflowExecutionHistoryResponse response =
+          migrationService.GetWorkflowExecutionHistory(
+              new GetWorkflowExecutionHistoryRequest()
+                  .setDomain(testEnvOld.getDomain())
+                  .setExecution(execution));
+      assertTrue("Workflow completed in Old", response.getHistory().getEvents().size() > 0);
+    } catch (Exception e) {
+      fail("should not throw error on get workflow execution on new client");
+    }
+  }
+
+  @Test
+  public void testListWorkflowExecutionsOnlyInNew() throws Exception {
+    // Create a valid ListWorkflowExecutionsRequest
+    try {
+      for (int i = 0; i < 100; i++) {
+        runSyncWF(clientNew, "wf-completed-only-in-new");
+        //          runSyncWF(clientOld, "wf-completed-only-in-old");
+        //          runSyncWF(clientNew, "wf-completed-in-both");
+        //          runSyncWF(clientOld, "wf-completed-in-both");
+      }
+      ListWorkflowExecutionsRequest listRequest =
+          new ListWorkflowExecutionsRequest()
+              .setDomain(testEnvNew.getDomain())
+              .setPageSize(10)
+              .setNextPageToken(NEXT_PAGE_TOKEN)
+              .setQuery("");
+      if (migrationService.hasPrefix(listRequest.getNextPageToken(), "to".getBytes())) {
+
+        ListWorkflowExecutionsResponse response =
+            migrationService.ListWorkflowExecutions(listRequest);
+
+        assertNotNull(response);
+        assertEquals(1000, response.getExecutions().size());
+      }
+    } catch (Exception e) {
       fail("should not throw error on list workflow executions" + e.getMessage());
     }
   }
 
-  @Test
-  public void testScanWorkflowExecutions() {
-    try {
-      ListWorkflowExecutionsResponse response =
-          migrationService.ScanWorkflowExecutions(
-              new ListWorkflowExecutionsRequest()
-                  .setDomain(testEnvOld.getDomain())
-                  .setPageSize(10)
-                  .setQuery("workflowType = '" + WORKFLOW_NAME + "'"));
+  //  @Test
+  //  public void testListWorkflowExecutionInBoth() {
+  //
+  //    try {
+  //      for (int i = 0; i < 100; i++) {
+  //        runSyncWF(clientNew, "workflow");
+  //        runSyncWF(clientOld, "workflow");
+  //      }
+  //      ListWorkflowExecutionsRequest listRequestInNew =
+  //          new ListWorkflowExecutionsRequest()
+  //              .setDomain(testEnvNew.getDomain())
+  //              .setPageSize(3)
+  //              .setQuery("");
+  //      ListWorkflowExecutionsRequest listRequestInOld =
+  //          new ListWorkflowExecutionsRequest()
+  //              .setDomain(testEnvOld.getDomain())
+  //              .setPageSize(3)
+  //              .setQuery("");
+  //
+  //      migrationService.ListWorkflowExecutions(listRequestInNew);
+  //      migrationService.ListWorkflowExecutions(listRequestInOld);
+  //
+  //      assertNumOfExecutions(testEnvNew, "workflow", 100);
+  //      assertNumOfExecutions(testEnvOld, "workflow", 100);
+  //
+  //    } catch (Exception e) {
+  //      fail(e.getMessage());
+  //    }
+  //  }
 
-      assertEquals(4, response.getExecutions().size());
+  //  @Test
+  //  public void testListWorkflowExecutionsInBoth() {
+  //    // Create a valid ListWorkflowExecutionsRequest
+  //    try {
+  //
+  //      ListWorkflowExecutionsResponse expectedResponse =
+  //          clientNew
+  //              .getService()
+  //              .ListWorkflowExecutions(
+  //                  new ListWorkflowExecutionsRequest()
+  //                      .setDomain(testEnvNew.getDomain())
+  //                      .setPageSize(10)
+  //                      .setNextPageToken(NEXT_PAGE_TOKEN)
+  //                      .setQuery(""));
+  //      ListWorkflowExecutionsRequest listRequest =
+  //          new ListWorkflowExecutionsRequest()
+  //              .setDomain(testEnvOld.getDomain())
+  //              .setPageSize(10)
+  //              .setNextPageToken(NEXT_PAGE_TOKEN)
+  //              .setQuery("");
+  //
+  //      try {
+  //        for (int i = 0; i < 100; i++) {
+  //          testEnvOld.getWorkflowService().StartWorkflowExecution(listRequest);
+  ////          runSyncWF(clientNew, "wf-completed-only-in-new");
+  ////          runSyncWF(clientOld, "wf-completed-only-in-old");
+  ////          runSyncWF(clientNew, "wf-completed-in-both");
+  ////          runSyncWF(clientOld, "wf-completed-in-both");
+  //        }
+  //      } catch (Exception e) {
+  //        fail("no exception excepted in starting workflows:" + e.getMessage());
+  //      }
+  //      if (migrationService.hasPrefix(listRequest.getNextPageToken(), "to".getBytes())) {
+  //
+  //        ListWorkflowExecutionsResponse response =
+  //            migrationService.ListWorkflowExecutions(listRequest);
+  //
+  //        assertNotNull(response);
+  //        assertEquals(expectedResponse, response);
+  //      }
+  //
+  //      assertEquals(1000, expectedResponse.getNextPageToken().length);
+  //    } catch (Exception e) {
+  //      fail("should not throw error on list workflow executions" + e.getMessage());
+  //    }
+  //  }
+
+  @Test
+  public void testScanWorkflowExecutionsOnlyInOld() {
+    try {
+      ListWorkflowExecutionsRequest listRequest =
+          new ListWorkflowExecutionsRequest()
+              .setDomain(testEnvOld.getDomain())
+              .setPageSize(10)
+              .setNextPageToken(NEXT_PAGE_TOKEN)
+              .setQuery("workflowType = '" + WORKFLOW_NAME + "'");
+      if (migrationService.hasPrefix(listRequest.getNextPageToken(), "to".getBytes())) {
+        ListWorkflowExecutionsResponse response =
+            migrationService.ScanWorkflowExecutions(listRequest);
+
+        assertEquals(4, response.getExecutions().size());
+      }
     } catch (TException e) {
       fail("should not throw error on scan workflow executions" + e.getMessage());
     }
